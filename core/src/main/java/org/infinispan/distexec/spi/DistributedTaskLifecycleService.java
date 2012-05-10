@@ -19,7 +19,8 @@
 package org.infinispan.distexec.spi;
 
 import java.io.IOException;
-import java.util.Iterator;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.ServiceConfigurationError;
 import java.util.ServiceLoader;
 import java.util.concurrent.Callable;
@@ -29,44 +30,44 @@ import org.infinispan.util.logging.LogFactory;
 
 public final class DistributedTaskLifecycleService {
 
-   private static final Log log = LogFactory.getLog(DistributedTaskLifecycleService.class);
-   private static DistributedTaskLifecycleService service;
-   private ServiceLoader<DistributedTaskLifecycle> loader;
+    private static final Log log = LogFactory.getLog(DistributedTaskLifecycleService.class);
+    private static DistributedTaskLifecycleService service;
+    private final List<DistributedTaskLifecycle> lifecycles;
 
-   private DistributedTaskLifecycleService() {
-      loader = ServiceLoader.load(DistributedTaskLifecycle.class);
-   }
+    private DistributedTaskLifecycleService() {
+        ServiceLoader<DistributedTaskLifecycle> loader = ServiceLoader.load(DistributedTaskLifecycle.class);
+        lifecycles = new ArrayList<DistributedTaskLifecycle>();
+        for (DistributedTaskLifecycle cl : loader) {
+            lifecycles.add(cl);
+        }
+    }
 
-   public static synchronized DistributedTaskLifecycleService getInstance() {
-      if (service == null) {
-         service = new DistributedTaskLifecycleService();
-      }
-      return service;
-   }
+    public static synchronized DistributedTaskLifecycleService getInstance() {
+        if (service == null) {
+            service = new DistributedTaskLifecycleService();
+        }
+        return service;
+    }
 
-   public <T> void onPreExecute(Callable<T> task) {
-      try {
-         Iterator<DistributedTaskLifecycle> i = loader.iterator();
-         while (i.hasNext()) {
-            DistributedTaskLifecycle cl = i.next();
-            cl.onPreExecute(task);
-         }
-      } catch (ServiceConfigurationError serviceError) {
-         log.errorReadingProperties(new IOException(
-                  "Could not properly load and instantiate DistributedTaskLifecycle service ", serviceError));
-      }
-   }
+    public <T> void onPreExecute(Callable<T> task) {
+        try {
+            for (DistributedTaskLifecycle cl : lifecycles) {
+                cl.onPreExecute(task);
+            }
+        } catch (ServiceConfigurationError serviceError) {
+            log.errorReadingProperties(new IOException(
+                    "Could not properly load and instantiate DistributedTaskLifecycle service ", serviceError));
+        }
+    }
 
-   public <T> void onPostExecute(Callable<T> task) {
-      try {
-         Iterator<DistributedTaskLifecycle> i = loader.iterator();
-         while (i.hasNext()) {
-            DistributedTaskLifecycle cl = i.next();
-            cl.onPostExecute(task);
-         }
-      } catch (ServiceConfigurationError serviceError) {
-         log.errorReadingProperties(new IOException(
-                  "Could not properly load and instantiate DistributedTaskLifecycle service ", serviceError));
-      }
-   }
+    public <T> void onPostExecute(Callable<T> task) {
+        try {
+            for (DistributedTaskLifecycle cl : lifecycles) {
+                cl.onPostExecute(task);
+            }
+        } catch (ServiceConfigurationError serviceError) {
+            log.errorReadingProperties(new IOException(
+                    "Could not properly load and instantiate DistributedTaskLifecycle service ", serviceError));
+        }
+    }
 }
