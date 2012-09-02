@@ -121,7 +121,7 @@ public class LifecycleManager extends AbstractModuleLifecycle {
       if ( ! verifyChainContainsQueryInterceptor(cr) ) {
          throw new IllegalStateException( "It was expected to find the Query interceptor registered in the InterceptorChain but it wasn't found" );
       }
-      
+
       // initializing the query module command initializer. we can t inject Cache with @inject in there
       Cache<?, ?> cache = cr.getComponent(Cache.class);
       CommandInitializer initializer = cr.getComponent(CommandInitializer.class);
@@ -150,7 +150,7 @@ public class LifecycleManager extends AbstractModuleLifecycle {
    private SearchFactoryIntegrator getSearchFactory(Properties indexingProperties, ComponentRegistry cr) {
        SearchFactoryIntegrator searchFactory = cr.getComponent(SearchFactoryIntegrator.class);
        //defend against multiple initialization:
-       if (searchFactory==null) {
+       if (searchFactory==null || searchFactory.isStopped()) {
           GlobalComponentRegistry globalComponentRegistry = cr.getGlobalComponentRegistry();
           EmbeddedCacheManager uninitializedCacheManager = globalComponentRegistry.getComponent(EmbeddedCacheManager.class);
           // Set up the search factory for Hibernate Search first.
