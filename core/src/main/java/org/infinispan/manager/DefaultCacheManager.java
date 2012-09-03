@@ -22,6 +22,21 @@
  */
 package org.infinispan.manager;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Set;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
+
 import org.infinispan.Cache;
 import org.infinispan.CacheException;
 import org.infinispan.Version;
@@ -61,20 +76,6 @@ import org.rhq.helpers.pluginAnnotations.agent.DisplayType;
 import org.rhq.helpers.pluginAnnotations.agent.Metric;
 import org.rhq.helpers.pluginAnnotations.agent.Operation;
 import org.rhq.helpers.pluginAnnotations.agent.Parameter;
-
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Map.Entry;
-import java.util.Set;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.ReentrantLock;
 
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 
@@ -131,6 +132,7 @@ public class DefaultCacheManager implements EmbeddedCacheManager, CacheManager {
    protected final Configuration defaultConfiguration;
    private final ConcurrentMap<String, CacheWrapper> caches = ConcurrentMapFactory.makeConcurrentMap();
    private final ConcurrentMap<String, Configuration> configurationOverrides = ConcurrentMapFactory.makeConcurrentMap();
+   private final ConcurrentMap<String, Lock> locks = ConcurrentMapFactory.makeConcurrentMap();
    private final GlobalComponentRegistry globalComponentRegistry;
    private final ReentrantLock cacheCreateLock;
    private volatile boolean stopping;
@@ -674,36 +676,99 @@ public class DefaultCacheManager implements EmbeddedCacheManager, CacheManager {
     * @return a null return value means the cache was created by someone else before we got the lock
     */
    private <K, V> Cache<K, V> wireCache(String cacheName) {
+      Lock lock = new ReentrantLock();
+      final Lock previous = locks.putIfAbsent(cacheName, lock);
+      if (previous != null) lock = previous;
+
       boolean acquired = false;
       try {
-         if (!cacheCreateLock.tryLock(defaultConfiguration.locking().lockAcquisitionTimeout(), MILLISECONDS)) {
+         if (!lock.tryLock(defaultConfiguration.locking().lockAcquisitionTimeout(), MILLISECONDS)) {
             throw new CacheException("Unable to acquire lock on cache with name " + cacheName);
          }
          acquired = true;
          CacheWrapper existingCache = caches.get(cacheName);
          if (existingCache != null)
             return null;
+      } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          throw new CacheException("Interrupted while trying to get lock on cache with cache name " + cacheName, e);
+      } finally {
+          if (acquired)
+              lock.unlock();
+      }
 
-         // start the global components here, while we have the global lock
-         // do it before we have created the CacheWrapper, so that we don't have to clean it up in case of a failure
-         globalComponentRegistry.start();
-
-         Configuration c = getConfiguration(cacheName);
-
-         Cache<K, V> cache = new InternalCacheFactory<K, V>().createCache(c, globalComponentRegistry, cacheName);
-         CacheWrapper cw = new CacheWrapper(cache);
-         existingCache = caches.put(cacheName, cw);
-         if (existingCache != null) {
-            throw new IllegalStateException("attempt to initialize the cache twice");
+      acquired = false;
+      try {
+         if (!cacheCreateLock.tryLock(defaultConfiguration.locking().lockAcquisitionTimeout(), MILLISECONDS)) {
+            throw new CacheException("Unable to acquire global lock on cache with name " + cacheName);
          }
+         acquired = true;
 
-         return cache;
+          // start the global components here, while we have the global lock
+          // do it before we have created the CacheWrapper, so that we don't have to clean it up in case of a failure
+          globalComponentRegistry.start();
+      } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          throw new CacheException("Interrupted while trying to get lock on cache with cache name " + cacheName, e);
+      } finally {
+          if (acquired)
+              cacheCreateLock.unlock();
+      }
+
+      Configuration c;
+      acquired = false;
+      try {
+         if (!lock.tryLock(defaultConfiguration.locking().lockAcquisitionTimeout(), MILLISECONDS)) {
+            throw new CacheException("Unable to acquire lock on cache with name " + cacheName);
+         }
+         acquired = true;
+
+         c = getConfiguration(cacheName);
+      } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          throw new CacheException("Interrupted while trying to get lock on cache with cache name " + cacheName, e);
+      } finally {
+          if (acquired)
+              lock.unlock();
+      }
+
+      Cache<K, V> cache;
+      acquired = false;
+      try {
+          if (!cacheCreateLock.tryLock(defaultConfiguration.locking().lockAcquisitionTimeout(), MILLISECONDS)) {
+             throw new CacheException("Unable to acquire global lock on cache with name " + cacheName);
+          }
+          acquired = true;
+
+          cache = new InternalCacheFactory<K, V>().createCache(c, globalComponentRegistry, cacheName);
+      } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          throw new CacheException("Interrupted while trying to get lock on cache with cache name " + cacheName, e);
+      } finally {
+          if (acquired)
+              cacheCreateLock.unlock();
+      }
+
+       acquired = false;
+       try {
+          if (!lock.tryLock(defaultConfiguration.locking().lockAcquisitionTimeout(), MILLISECONDS)) {
+             throw new CacheException("Unable to acquire lock on cache with name " + cacheName);
+          }
+          acquired = true;
+
+          CacheWrapper cw = new CacheWrapper(cache);
+          CacheWrapper existingCache = caches.put(cacheName, cw);
+          if (existingCache != null) {
+             throw new IllegalStateException("attempt to initialize the cache twice");
+          }
+
+          return cache;
       } catch (InterruptedException e) {
          Thread.currentThread().interrupt();
          throw new CacheException("Interrupted while trying to get lock on cache with cache name " + cacheName, e);
       } finally {
          if (acquired)
-            cacheCreateLock.unlock();
+            lock.unlock();
       }
    }
 
@@ -733,6 +798,8 @@ public class DefaultCacheManager implements EmbeddedCacheManager, CacheManager {
             if (!stopping) {
                log.debugf("Stopping cache manager %s on %s", globalConfiguration.transport().clusterName(), getAddress());
                stopping = true;
+               // clear locks
+               locks.clear();
                // make sure we stop the default cache LAST!
                Cache<?, ?> defaultCache = null;
                for (Map.Entry<String, CacheWrapper> entry : caches.entrySet()) {
