@@ -40,7 +40,9 @@ import org.hibernate.search.query.engine.spi.HSQuery;
 import org.hibernate.search.query.engine.spi.TimeoutExceptionFactory;
 import org.hibernate.search.spi.SearchFactoryIntegrator;
 import org.infinispan.AdvancedCache;
+import org.infinispan.factories.ComponentRegistry;
 import org.infinispan.query.CacheQuery;
+import org.infinispan.query.EntityLoader;
 import org.infinispan.query.QueryIterator;
 import org.infinispan.query.backend.KeyTransformationHandler;
 
@@ -51,6 +53,7 @@ import org.infinispan.query.backend.KeyTransformationHandler;
  * @author Navin Surtani
  * @author Sanne Grinovero <sanne@hibernate.org> (C) 2011 Red Hat Inc.
  * @author Marko Luksa
+ * @author Ales Justin
  */
 public class CacheQueryImpl implements CacheQuery {
 
@@ -170,13 +173,18 @@ public class CacheQueryImpl implements CacheQuery {
    public List<Object> list() throws SearchException {
       hSearchQuery.getTimeoutManager().start();
       final List<EntityInfo> entityInfos = hSearchQuery.queryEntityInfos();
-      EntityLoader loader = getLoader();
-      List<Object> list = loader.load( entityInfos.toArray( new EntityInfo[entityInfos.size()] ) );
-      return list;
+      final EntityLoader loader = getLoader();
+      return loader.load( entityInfos.toArray( new EntityInfo[entityInfos.size()] ) );
    }
 
-   private EntityLoader getLoader() {
-      return new EntityLoader(cache, keyTransformationHandler);
+   protected EntityLoader getLoader() {
+      ComponentRegistry cr = cache.getComponentRegistry();
+      EntityLoader el = cr.getComponent(EntityLoader.class);
+      if (el != null) {
+          return el;
+      }
+
+      return new EntityLoaderImpl(cache, keyTransformationHandler);
    }
 
    private List<Object> fromEntityInfosToKeys(final List<EntityInfo> entityInfos) {
