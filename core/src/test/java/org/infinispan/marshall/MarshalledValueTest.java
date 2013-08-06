@@ -497,7 +497,7 @@ public class MarshalledValueTest extends MultipleCacheManagersTest {
         ClassLoader cl2 = new URLClassLoader(new URL[]{core, tests}, null);
 
         ConfigurationBuilder builder = TestCacheManagerFactory.getDefaultCacheConfiguration(false);
-        builder.storeAsBinary().enable();
+        builder.storeAsBinary().enable(); //.defensive(true);
         Cache cache = TestCacheManagerFactory.createCacheManager(builder).getCache();
 
         Object key1 = cl1.loadClass(Key.class.getName()).getConstructor(String.class, Boolean.TYPE).newInstance("key1", false);
