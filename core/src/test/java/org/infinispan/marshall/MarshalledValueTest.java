@@ -37,11 +37,16 @@ import org.infinispan.loaders.dummy.DummyInMemoryCacheStoreConfigurationBuilder;
 import org.infinispan.notifications.Listener;
 import org.infinispan.notifications.cachelistener.annotation.CacheEntryModified;
 import org.infinispan.notifications.cachelistener.event.CacheEntryModifiedEvent;
+import org.infinispan.test.CherryPickClassLoader;
 import org.infinispan.test.MultipleCacheManagersTest;
 import org.infinispan.test.TestingUtil;
+import org.infinispan.test.data.Key;
+import org.infinispan.test.fwk.TestCacheManagerFactory;
 import org.infinispan.util.ObjectDuplicator;
+import org.infinispan.util.concurrent.ReclosableLatch;
 import org.infinispan.util.logging.Log;
 import org.infinispan.util.logging.LogFactory;
+import org.testng.AssertJUnit;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
@@ -53,6 +58,8 @@ import java.io.ObjectInput;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutput;
 import java.io.Serializable;
+import java.net.URL;
+import java.net.URLClassLoader;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -482,7 +489,32 @@ public class MarshalledValueTest extends MultipleCacheManagersTest {
       assertEquals(mv, mv2);
    }
 
-   @Listener
+    @SuppressWarnings("unchecked")
+    public void testDiffClassloaders() throws Exception {
+        URL core = ReclosableLatch.class.getProtectionDomain().getCodeSource().getLocation();
+        URL tests = getClass().getResource("/");
+        ClassLoader cl1 = new URLClassLoader(new URL[]{core, tests}, null);
+        ClassLoader cl2 = new URLClassLoader(new URL[]{core, tests}, null);
+
+        ConfigurationBuilder builder = TestCacheManagerFactory.getDefaultCacheConfiguration(false);
+        builder.storeAsBinary().enable();
+        Cache cache = TestCacheManagerFactory.createCacheManager(builder).getCache();
+
+        Object key1 = cl1.loadClass(Key.class.getName()).getConstructor(String.class, Boolean.TYPE).newInstance("key1", false);
+        Object key2 = cl2.loadClass(Key.class.getName()).getConstructor(String.class, Boolean.TYPE).newInstance("key1", false);
+
+        ClassLoader kcl1 = key1.getClass().getClassLoader();
+        ClassLoader kcl2 = key2.getClass().getClassLoader();
+        //AssertJUnit.assertFalse(kcl1.equals(kcl2));
+
+        String value = "tralala";
+        cache.put(key1, value);
+        Object result = cache.get(key2);
+        AssertJUnit.assertNotNull(result);
+        AssertJUnit.assertEquals(value, result);
+    }
+
+    @Listener
    public static class MockListener {
       Object newValue;
 
